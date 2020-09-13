@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 
-import sys
+import os
 
 import gym
 import torch
@@ -29,8 +29,11 @@ def test_model(model_file: str):
     env.close()
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("provide model file")
+def select_pth():
+    files = os.listdir('pth')
+    return 'pth/' + sorted(files)[-1]
 
-    test_model(sys.argv[1])
+
+if __name__ == "__main__":
+    test_model(select_pth())
+

@@ -28,19 +28,10 @@ actor critic had two set of outputs - softmax w/ one entry per action and single
 discount = 0.99, RMSProp decay factor of 0.99
 review section 8 for further details """
 NUM_THREADS = 8
-I_update = 5
-t_max = 250  # max individual number of frames
-T_max = 40000
-T = 0
-
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 learning_rate = 1e-3
 gamma = 0.99
 BETA = 0.99
-
-
-torch.autograd.set_detect_anomaly(True)
-
 
 shared_net = ActorCriticNet(4, 2)
 
@@ -195,7 +186,6 @@ class Train:
 
                 # check if solved
                 if np.mean(total_rewards) > 200:
-                    torch.save(self.thread_net.state_dict(), "model.pth")
                     print("\nSolved!")
                     break
 
@@ -219,5 +209,4 @@ if __name__ == "__main__":
         trainer.solve_env()
     finally:
         import time
-
-        torch.save(trainer.thread_net.state_dict(), f"model_{time.time()}.pth")
+        torch.save(trainer.thread_net.state_dict(), f"pth/model_{time.time()}.pth")
