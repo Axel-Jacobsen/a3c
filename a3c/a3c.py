@@ -1,5 +1,6 @@
 #! /usr/bin/env python3
 
+import os
 import gym
 import torch
 import numpy as np
@@ -28,24 +29,28 @@ actor critic had two set of outputs - softmax w/ one entry per action and single
 discount = 0.99, RMSProp decay factor of 0.99
 review section 8 for further details """
 NUM_THREADS = 8
-BATCH_SIZE = 32
+BATCH_SIZE = 128
 learning_rate = 1e-3
 gamma = 0.99
 BETA = 0.99
 
+def select_pth():
+    files = os.listdir('pth')
+    return './pth/' + sorted(files)[0]
+
 shared_net = ActorCriticNet(4, 2)
 
-
 class Train:
-    def __init__(self):
+    def __init__(self, model_file: str = None):
         # Below this is the work that should be done by each thread
         self.thread_net = ActorCriticNet(4, 2)
-        self.thread_net.load_state_dict(shared_net.state_dict())
+        # self.thread_net.load_state_dict(shared_net.state_dict())
+        # self.thread_net.eval()
 
         self.value_loss_fcn = nn.MSELoss(reduction="sum")
         self.optimizer = optim.RMSprop(self.thread_net.parameters(), lr=learning_rate)
 
-        self.env = gym.make("CartPole-v0")
+        self.env = gym.make("CartPole-v1")
 
     def play_episode(self):
 
