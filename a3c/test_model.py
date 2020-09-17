@@ -30,10 +30,9 @@ def test_model(model_file: str):
 
 
 def select_pth():
-    files = os.listdir('pth')
-    return 'pth/' + sorted(files)[-1]
+    files = os.listdir("pth")
+    return "pth/" + sorted(files)[-1]
 
 
 if __name__ == "__main__":
     test_model(select_pth())
-
