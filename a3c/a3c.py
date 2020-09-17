@@ -34,11 +34,14 @@ learning_rate = 1e-3
 gamma = 0.99
 BETA = 0.99
 
+
 def select_pth():
-    files = os.listdir('pth')
-    return './pth/' + sorted(files)[0]
+    files = os.listdir("pth")
+    return "./pth/" + sorted(files)[0]
+
 
 shared_net = ActorCriticNet(4, 2)
+
 
 class Train:
     def __init__(self, model_file: str = None):
@@ -55,12 +58,8 @@ class Train:
     def play_episode(self):
 
         episode_actions = torch.empty(size=(0,), dtype=torch.long)
-        episode_logits = torch.empty(
-            size=(0, self.env.action_space.n), dtype=torch.long
-        )
-        episode_observs = torch.empty(
-            size=(0, *self.env.observation_space.shape), dtype=torch.long
-        )
+        episode_logits = torch.empty(size=(0, self.env.action_space.n), dtype=torch.long)
+        episode_observs = torch.empty(size=(0, *self.env.observation_space.shape), dtype=torch.long)
         episode_rewards = np.empty(shape=(0,), dtype=np.float)
 
         observation = self.env.reset()
@@ -95,9 +94,7 @@ class Train:
         discounted_R -= episode_rewards.mean()
 
         mask = F.one_hot(episode_actions, num_classes=self.env.action_space.n)
-        episode_log_probs = torch.sum(
-            mask.float() * F.log_softmax(episode_logits, dim=1), dim=1
-        )
+        episode_log_probs = torch.sum(mask.float() * F.log_softmax(episode_logits, dim=1), dim=1)
 
         episode_weighted_log_probs = episode_log_probs * discounted_R.float()
         sum_weighted_log_probs = torch.sum(episode_weighted_log_probs).unsqueeze(dim=0)
@@ -130,9 +127,7 @@ class Train:
             discounted_rewards[i] = discounted_reward
         return torch.from_numpy(discounted_rewards)
 
-    def calculate_policy_loss(
-        self, epoch_logits: torch.Tensor, weighted_log_probs: torch.Tensor
-    ):
+    def calculate_policy_loss(self, epoch_logits: torch.Tensor, weighted_log_probs: torch.Tensor):
 
         policy_loss = -torch.mean(weighted_log_probs)
         p = F.softmax(epoch_logits, dim=1)
@@ -162,9 +157,7 @@ class Train:
             T += t
             episode += 1
             total_rewards.append(total_episode_reward)
-            epoch_weighted_log_probs = torch.cat(
-                (epoch_weighted_log_probs, episode_weighted_log_probs), dim=0
-            )
+            epoch_weighted_log_probs = torch.cat((epoch_weighted_log_probs, episode_weighted_log_probs), dim=0)
 
             if episode > BATCH_SIZE:
 
@@ -172,17 +165,13 @@ class Train:
                 epoch += 1
 
                 policy_loss, entropy = self.calculate_policy_loss(
-                    epoch_logits=epoch_logits,
-                    weighted_log_probs=epoch_weighted_log_probs,
+                    epoch_logits=epoch_logits, weighted_log_probs=epoch_weighted_log_probs,
                 )
 
                 self.optimizer.zero_grad()
                 policy_loss.backward()
                 self.optimizer.step()
-                print(
-                    f"Epoch: {epoch}, Avg Return per Epoch:"
-                    f" {np.mean(total_rewards):.3f}"
-                )
+                print(f"Epoch: {epoch}, Avg Return per Epoch: {np.mean(total_rewards):.3f}")
 
                 # reset the epoch arrays
                 # used for entropy calculation
@@ -214,4 +203,5 @@ if __name__ == "__main__":
         trainer.solve_env()
     finally:
         import time
+
         torch.save(trainer.thread_net.state_dict(), f"pth/model_{time.time()}.pth")
