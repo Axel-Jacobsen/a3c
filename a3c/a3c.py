@@ -10,9 +10,13 @@ from torch.nn import functional as F
 from torch.distributions.categorical import Categorical
 
 from model import ActorCriticNet
+
 from collections import namedtuple
 
-"""Asynchronous Advantage Actor-Critic
+torch.manual_seed(0)
+torch.autograd.set_detect_anomaly(True)
+
+""" Asynchronous Advantage Actor-Critic
 
 Following a lot of the following link because i am a pytorch noob
 https://towardsdatascience.com/breaking-down-richard-suttons-policy-gradient-9768602cb63b
@@ -27,36 +31,30 @@ network architecture of Mnih et al., 2013
 nonlinearity after each hidden layer is the rectifier (?)
 actor critic had two set of outputs - softmax w/ one entry per action and single linear output representing the value function
 discount = 0.99, RMSProp decay factor of 0.99
-review section 8 for further details """
-NUM_THREADS = 8
-BATCH_SIZE = 128
-learning_rate = 1e-3
-gamma = 0.99
+review section 8 for further details
+"""
+
+
+NUM_THREADS = 16
+
+BATCH_SIZE = 512
 BETA = 0.99
+GAMMA = 0.99
+LEARNING_RATE = 1e-2
 
 
-def select_pth():
+def _select_pth():
     files = os.listdir("pth")
     return "./pth/" + sorted(files)[0]
 
 
-shared_net = ActorCriticNet(4, 2)
-
-
-class Train:
+class TrainingThread:
     def __init__(self, model_file: str = None):
-        # Below this is the work that should be done by each thread
-        self.thread_net = ActorCriticNet(4, 2)
-        # self.thread_net.load_state_dict(shared_net.state_dict())
-        # self.thread_net.eval()
-
-        self.value_loss_fcn = nn.MSELoss(reduction="sum")
-        self.optimizer = optim.RMSprop(self.thread_net.parameters(), lr=learning_rate)
-
+        self.thread_net = ActorCriticNet(4, 2, training=True)
+        self.optimizer = optim.RMSprop(self.thread_net.parameters(), lr=LEARNING_RATE)
         self.env = gym.make("CartPole-v1")
 
     def play_episode(self):
-
         episode_actions = torch.empty(size=(0,), dtype=torch.long)
         episode_logits = torch.empty(size=(0, self.env.action_space.n), dtype=torch.long)
         episode_observs = torch.empty(size=(0, *self.env.observation_space.shape), dtype=torch.long)
@@ -65,54 +63,54 @@ class Train:
         observation = self.env.reset()
 
         t = 0
-        while True:
+        done = False
+        while not done:
             # Prepare observation
             cleaned_observation = torch.tensor(observation).unsqueeze(dim=0)
             episode_observs = torch.cat((episode_observs, cleaned_observation), dim=0)
-            # Get action from policy net
-            action_logits = self.thread_net.forward_policy(cleaned_observation)
-            episode_logits = torch.cat((episode_logits, action_logits), dim=0)
 
+            # Get action from policy net
+            action_logits = self.thread_net.forward_actor(cleaned_observation)
             action = Categorical(logits=action_logits).sample()
+
             # Save observation and the action from the net
+            episode_logits = torch.cat((episode_logits, action_logits), dim=0)
             episode_actions = torch.cat((episode_actions, action), dim=0)
+
             # Get new observation and reward from action
             observation, r, done, _ = self.env.step(action.item())
+
             # Save reward from net_action
             episode_rewards = np.concatenate((episode_rewards, np.asarray([r])), axis=0)
 
             t += 1
-            if done:
-                break
 
-        # Set initial reward to 0 if it was terminal state, otherwise criticize it
-        R = 0 if done else thread_net.forward_critic(observation)
-
-        discounted_R = self.get_discounted_rewards(episode_rewards, gamma)
-
-        # normalize reward
+        discounted_R = self.get_discounted_rewards(episode_rewards, GAMMA)
         discounted_R -= episode_rewards.mean()
 
         mask = F.one_hot(episode_actions, num_classes=self.env.action_space.n)
         episode_log_probs = torch.sum(mask.float() * F.log_softmax(episode_logits, dim=1), dim=1)
 
-        episode_weighted_log_probs = episode_log_probs * discounted_R.float()
+        values = self.thread_net.forward_critic(episode_observs)
+        action_advantage = (discounted_R.float() - values).detach()
+        episode_weighted_log_probs = episode_log_probs * action_advantage
         sum_weighted_log_probs = torch.sum(episode_weighted_log_probs).unsqueeze(dim=0)
+        sum_action_advantages = torch.sum(action_advantage).unsqueeze(dim=0)
 
         return (
             sum_weighted_log_probs,
+            sum_action_advantages,
             episode_logits,
-            episode_observs,
             np.sum(episode_rewards),
             t,
         )
 
-    def get_discounted_rewards(self, rewards: np.array, gamma: float) -> torch.Tensor:
+    def get_discounted_rewards(self, rewards: np.array, GAMMA: float) -> torch.Tensor:
         """
         Calculates the sequence of discounted rewards-to-go.
         Args:
             rewards: the sequence of observed rewards
-            gamma: the discount factor
+            GAMMA: the discount factor
         Returns:
             discounted_rewards: the sequence of the rewards-to-go
 
@@ -121,9 +119,9 @@ class Train:
         """
         discounted_rewards = np.empty_like(rewards, dtype=np.float)
         for i in range(rewards.shape[0]):
-            gammas = np.full(shape=(rewards[i:].shape[0]), fill_value=gamma)
-            discounted_gammas = np.power(gammas, np.arange(rewards[i:].shape[0]))
-            discounted_reward = np.sum(rewards[i:] * discounted_gammas)
+            GAMMAs = np.full(shape=(rewards[i:].shape[0]), fill_value=GAMMA)
+            discounted_GAMMAs = np.power(GAMMAs, np.arange(rewards[i:].shape[0]))
+            discounted_reward = np.sum(rewards[i:] * discounted_GAMMAs)
             discounted_rewards[i] = discounted_reward
         return torch.from_numpy(discounted_rewards)
 
@@ -136,20 +134,19 @@ class Train:
         entropy_bonus = -1 * BETA * entropy
         return policy_loss + entropy_bonus, entropy
 
-    def solve_env(self):
-        episode = 0
-        epoch = 0
-        T = 0
+    def train(self):
+        episode, epoch, T = 0, 0, 0
 
         total_rewards = []
         epoch_logits = torch.empty(size=(0, self.env.action_space.n))
+        epoch_action_advantage = torch.empty(size=(0,))
         epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
 
         while True:
             (
                 episode_weighted_log_probs,
+                action_advantage_sum,
                 episode_logits,
-                episode_observs,
                 total_episode_reward,
                 t,
             ) = self.play_episode()
@@ -157,7 +154,12 @@ class Train:
             T += t
             episode += 1
             total_rewards.append(total_episode_reward)
-            epoch_weighted_log_probs = torch.cat((epoch_weighted_log_probs, episode_weighted_log_probs), dim=0)
+            epoch_weighted_log_probs = torch.cat(
+                (epoch_weighted_log_probs, episode_weighted_log_probs), dim=0
+            )
+            epoch_action_advantage = torch.cat(
+                (epoch_action_advantage, action_advantage_sum), dim=0
+            )
 
             if episode > BATCH_SIZE:
 
@@ -167,14 +169,21 @@ class Train:
                 policy_loss, entropy = self.calculate_policy_loss(
                     epoch_logits=epoch_logits, weighted_log_probs=epoch_weighted_log_probs,
                 )
+                value_loss = torch.square(epoch_action_advantage).mean()
+                total_loss = policy_loss + value_loss
 
                 self.optimizer.zero_grad()
-                policy_loss.backward()
-                self.optimizer.step()
-                print(f"Epoch: {epoch}, Avg Return per Epoch: {np.mean(total_rewards):.3f}")
 
-                # reset the epoch arrays
-                # used for entropy calculation
+                total_loss.backward()
+
+                self.optimizer.step()
+
+                print(
+                    f"Epoch: {epoch}, Avg Return per Epoch:"
+                    f" {np.mean(total_rewards):.3f}"
+                )
+
+                # reset the epoch arrays, used for entropy calculation
                 epoch_logits = torch.empty(size=(0, self.env.action_space.n))
                 epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
 
@@ -186,22 +195,11 @@ class Train:
         self.env.close()
 
 
-# shared_net.load_state_dict(thread_net)
-
-# # Get a vector of values for each observation
-# predicted_R = thread_net.forward_critic(observs)
-# value_loss = value_loss_fcn(discounted_R, predicted_R)
-
-# optimizer.zero_grad()
-# value_loss.backward()
-# optimizer.step()
-
 if __name__ == "__main__":
-    trainer = Train()
+    trainer = TrainingThread()
 
     try:
-        trainer.solve_env()
+        trainer.train()
     finally:
         import time
-
         torch.save(trainer.thread_net.state_dict(), f"pth/model_{time.time()}.pth")
