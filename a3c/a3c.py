@@ -44,7 +44,7 @@ BETA = 0.99
 GAMMA = 0.99
 LEARNING_RATE = 1e-3
 SHARED_NET_UPDATE = 40000
-VALUE_LOSS_CONSTANT = 1
+VALUE_LOSS_CONSTANT = 0.5
 
 
 def _select_pth():
@@ -54,16 +54,15 @@ def _select_pth():
 
 class TrainerProcess:
     def __init__(self, global_net, global_opt):
-        self.thread_net = ActorCriticNet(4, 2, training=True)
-        self.thread_net.load_state_dict(global_net.state_dict())
-        self.thread_net.train()
+        self.proc_net = ActorCriticNet(4, 2, training=True)
+        self.proc_net.load_state_dict(global_net.state_dict())
+        self.proc_net.train()
 
         self.global_net = global_net
         self.optimizer = global_opt
-        self.grad_accum = [torch.zeros_like(p) for p in self.thread_net.parameters()]
         self.env = gym.make("CartPole-v1")
 
-        print(f'Starting process...')
+        print(f"Starting process...")
         sys.stdout.flush()
 
     def play_episode(self):
@@ -82,7 +81,7 @@ class TrainerProcess:
             episode_observs = torch.cat((episode_observs, cleaned_observation), dim=0)
 
             # Get action from policy net
-            action_logits = self.thread_net.forward_actor(cleaned_observation)
+            action_logits = self.proc_net.forward_actor(cleaned_observation)
             action = Categorical(logits=action_logits).sample()
 
             # Save observation and the action from the net
@@ -103,7 +102,7 @@ class TrainerProcess:
         mask = F.one_hot(episode_actions, num_classes=self.env.action_space.n)
         episode_log_probs = torch.sum(mask.float() * F.log_softmax(episode_logits, dim=1), dim=1)
 
-        values = self.thread_net.forward_critic(episode_observs)
+        values = self.proc_net.forward_critic(episode_observs)
         action_advantage = (discounted_R.float() - values).detach()
         episode_weighted_log_probs = episode_log_probs * action_advantage
         sum_weighted_log_probs = torch.sum(episode_weighted_log_probs).unsqueeze(dim=0)
@@ -145,11 +144,11 @@ class TrainerProcess:
         entropy_bonus = -1 * BETA * entropy
         return policy_loss + entropy_bonus, entropy
 
-    def add_grads(self, grads):
-        for i, p in enumerate(self.global_net.parameters()):
-            if p.grad is None:
-                p._grad = torch.zeros_like(p)
-            p._grad += grads[i]
+    def share_grads(self):
+        for gp, lp in zip(self.global_net.parameters(), self.proc_net.parameters()):
+            if gp.grad is not None:
+                return
+            gp._grad = lp.grad
 
     def train(self):
         episode, epoch, T = 0, 0, 0
@@ -185,14 +184,12 @@ class TrainerProcess:
                 value_loss = torch.square(epoch_action_advantage).mean()
                 total_loss = policy_loss + VALUE_LOSS_CONSTANT * value_loss
 
-                for i, grad in enumerate(self.thread_net.parameters()):
-                    self.grad_accum[i] += grad.detach()
-
                 self.optimizer.zero_grad()
-
+                self.share_grads()
                 total_loss.backward()
-
                 self.optimizer.step()
+
+                self.proc_net.load_state_dict(self.global_net.state_dict())
 
                 print(f"{os.getpid()} Epoch: {epoch}, Avg Return per Epoch: {np.mean(total_rewards):.3f}")
                 sys.stdout.flush()
@@ -201,11 +198,6 @@ class TrainerProcess:
                 epoch_logits = torch.empty(size=(0, self.env.action_space.n))
                 epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
 
-                if T > SHARED_NET_UPDATE:
-                    self.add_grads(self.grad_accum)
-                    self.thread_net.load_state_dict(self.global_net.state_dict())
-                    sys.stdout.flush()
-                    T = 0
 
                 # check if solved
                 if np.mean(total_rewards) > 200:
@@ -216,7 +208,9 @@ class TrainerProcess:
 
 
 if __name__ == "__main__":
-    NUM_PROCS = 8
+    NUM_PROCS = mp.cpu_count()
+    print(f'Starting {NUM_PROCS} processes')
+    print( '------------------------------', end='\n\n')
 
     global_net = ActorCriticNet(4, 2, training=True)
     optimizer = SharedRMSprop(global_net.parameters(), lr=LEARNING_RATE)
@@ -228,7 +222,7 @@ if __name__ == "__main__":
         procs = []
         for i in range(NUM_PROCS):
             tp = TrainerProcess(global_net, optimizer)
-            p = mp.Process(target=tp.train, args=(global_net, optimizer))
+            p = mp.Process(target=tp.train)
             procs.append(p)
             p.start()
         for p in procs:

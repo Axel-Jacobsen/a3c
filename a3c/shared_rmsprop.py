@@ -10,15 +10,14 @@ class SharedRMSprop(torch.optim.RMSprop):
         super(SharedRMSprop, self).__init__(params, lr=lr, alpha=alpha, eps=eps, weight_decay=weight_decay, momentum=0)
         # State initialization
         for group in self.param_groups:
-            for p in group['params']:
+            for p in group["params"]:
                 state = self.state[p]
-                state['step'] = 0
-                state['square_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                state['momentum_buffer'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                state['grad_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                state["step"] = 0
+                state["square_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                state["momentum_buffer"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                state["grad_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
 
                 # share in memory
-                state['square_avg'].share_memory_()
-                state['momentum_buffer'].share_memory_()
-                state['grad_avg'].share_memory_()
-
+                state["square_avg"].share_memory_()
+                state["momentum_buffer"].share_memory_()
+                state["grad_avg"].share_memory_()
