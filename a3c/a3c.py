@@ -69,6 +69,8 @@ class Trainer:
 
     def add_grads(self, grads):
         for i, p in enumerate(self.global_net.parameters()):
+            if p.grad is None:
+                p.grad = torch.zeros(p.shape)
             p.grad += grads[i]
 
     def train(self):
@@ -212,7 +214,7 @@ class TrainerProcess:
                 total_loss = policy_loss + VALUE_LOSS_CONSTANT * value_loss
 
                 for i, grad in enumerate(self.thread_net.parameters()):
-                    self.grad_accum[i] += grad
+                    self.grad_accum[i] += grad.detach()
 
                 self.optimizer.zero_grad()
 
@@ -228,7 +230,7 @@ class TrainerProcess:
                 epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
 
                 if T > SHARED_NET_UPDATE:
-                    grad_q.put(self.grad_accum.detach())
+                    grad_q.put(self.grad_accum)
                     self.thread_net.load_state_dict(global_state_q.get())
                     self.thread_net.eval()
 
