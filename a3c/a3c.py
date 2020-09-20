@@ -208,7 +208,7 @@ class TrainerProcess:
 
 
 if __name__ == "__main__":
-    NUM_PROCS = mp.cpu_count()
+    NUM_PROCS = 4
     print(f'Starting {NUM_PROCS} processes')
     print( '------------------------------', end='\n\n')
 
