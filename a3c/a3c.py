@@ -1,9 +1,11 @@
 #! /usr/bin/env python3
 
 import os
+import sys
 import gym
 import torch
 import numpy as np
+import torch.multiprocessing as mp
 
 from torch import nn, optim
 from torch.nn import functional as F
@@ -35,12 +37,12 @@ review section 8 for further details
 """
 
 
-NUM_THREADS = 16
-
 BATCH_SIZE = 512
 BETA = 0.99
 GAMMA = 0.99
-LEARNING_RATE = 1e-2
+LEARNING_RATE = 1e-3
+VALUE_LOSS_CONSTANT = 0.6
+SHARED_NET_UPDATE = 40000
 
 
 def _select_pth():
@@ -48,11 +50,53 @@ def _select_pth():
     return "./pth/" + sorted(files)[0]
 
 
-class TrainingThread:
+class Trainer:
+    def __init__(self, num_procs):
+        self.num_procs = num_procs
+        self.global_net = ActorCriticNet(4, 2, training=True)
+        self.optimizer = optim.RMSprop(self.global_net.parameters(), lr=LEARNING_RATE)
+        self.grad_q = mp.Queue()
+        self.global_state_q = mp.Queue()
+
+    def spawn_processes(self):
+        procs = []
+        for i in range(self.num_procs):
+            tp = TrainerProcess(self.global_net.state_dict())
+            p = mp.Process(target=tp.train, args=(self.grad_q, self.global_state_q))
+            p.start()
+            procs.append(p)
+        return procs
+
+    def add_grads(self, grads):
+        for i, p in enumerate(self.global_net.parameters()):
+            p.grad += grads[i]
+
+    def train(self):
+        procs = self.spawn_processes()
+        while len(mp.active_children()) > 0:
+            i = 0
+            while not self.grad_q.empty():
+                i += 1
+                self.add_grads(self.grad_q.get())
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            for _ in range(i):
+                global_params = self.global_net.state_dict().detach()
+                self.global_state_q.put(global_params)
+
+
+class TrainerProcess:
     def __init__(self, model_file: str = None):
         self.thread_net = ActorCriticNet(4, 2, training=True)
+        self.thread_net.load_state_dict(model_file)
+        self.thread_net.eval()
+
         self.optimizer = optim.RMSprop(self.thread_net.parameters(), lr=LEARNING_RATE)
+        self.grad_accum = [torch.zeros(p.shape) for p in self.thread_net.parameters()]
         self.env = gym.make("CartPole-v1")
+
+        print(f'Starting process...')
+        sys.stdout.flush()
 
     def play_episode(self):
         episode_actions = torch.empty(size=(0,), dtype=torch.long)
@@ -126,7 +170,6 @@ class TrainingThread:
         return torch.from_numpy(discounted_rewards)
 
     def calculate_policy_loss(self, epoch_logits: torch.Tensor, weighted_log_probs: torch.Tensor):
-
         policy_loss = -torch.mean(weighted_log_probs)
         p = F.softmax(epoch_logits, dim=1)
         log_p = F.log_softmax(epoch_logits, dim=0)
@@ -134,7 +177,7 @@ class TrainingThread:
         entropy_bonus = -1 * BETA * entropy
         return policy_loss + entropy_bonus, entropy
 
-    def train(self):
+    def train(self, grad_q, global_state_q):
         episode, epoch, T = 0, 0, 0
 
         total_rewards = []
@@ -154,12 +197,8 @@ class TrainingThread:
             T += t
             episode += 1
             total_rewards.append(total_episode_reward)
-            epoch_weighted_log_probs = torch.cat(
-                (epoch_weighted_log_probs, episode_weighted_log_probs), dim=0
-            )
-            epoch_action_advantage = torch.cat(
-                (epoch_action_advantage, action_advantage_sum), dim=0
-            )
+            epoch_weighted_log_probs = torch.cat((epoch_weighted_log_probs, episode_weighted_log_probs), dim=0)
+            epoch_action_advantage = torch.cat((epoch_action_advantage, action_advantage_sum), dim=0)
 
             if episode > BATCH_SIZE:
 
@@ -170,7 +209,10 @@ class TrainingThread:
                     epoch_logits=epoch_logits, weighted_log_probs=epoch_weighted_log_probs,
                 )
                 value_loss = torch.square(epoch_action_advantage).mean()
-                total_loss = policy_loss + value_loss
+                total_loss = policy_loss + VALUE_LOSS_CONSTANT * value_loss
+
+                for i, grad in enumerate(self.thread_net.parameters()):
+                    self.grad_accum[i] += grad
 
                 self.optimizer.zero_grad()
 
@@ -178,14 +220,17 @@ class TrainingThread:
 
                 self.optimizer.step()
 
-                print(
-                    f"Epoch: {epoch}, Avg Return per Epoch:"
-                    f" {np.mean(total_rewards):.3f}"
-                )
+                print(f"{os.getpid()} Epoch: {epoch}, Avg Return per Epoch: {np.mean(total_rewards):.3f}")
+                sys.stdout.flush()
 
                 # reset the epoch arrays, used for entropy calculation
                 epoch_logits = torch.empty(size=(0, self.env.action_space.n))
                 epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
+
+                if T > SHARED_NET_UPDATE:
+                    grad_q.put(self.grad_accum.detach())
+                    self.thread_net.load_state_dict(global_state_q.get())
+                    self.thread_net.eval()
 
                 # check if solved
                 if np.mean(total_rewards) > 200:
@@ -196,10 +241,10 @@ class TrainingThread:
 
 
 if __name__ == "__main__":
-    trainer = TrainingThread()
-
+    NUM_PROCS = 15
+    trainer = Trainer(NUM_PROCS)
     try:
         trainer.train()
     finally:
         import time
-        torch.save(trainer.thread_net.state_dict(), f"pth/model_{time.time()}.pth")
+        torch.save(trainer.global_net.state_dict(), f"pth/model_{time.time()}.pth")

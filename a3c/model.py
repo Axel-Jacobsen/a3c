@@ -26,4 +26,3 @@ class ActorCriticNet(nn.Module):
         out = F.dropout(out, training=self.training)
         out = F.relu(self.actor(out))
         return F.softmax(out, dim=-1)
-
