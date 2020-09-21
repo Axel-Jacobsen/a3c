@@ -109,7 +109,7 @@ class TrainerProcess:
             sum_action_advantages,
             episode_logits,
             np.sum(episode_rewards),
-            t
+            t,
         )
 
     def get_discounted_rewards(self, rewards: np.array, GAMMA: float) -> torch.Tensor:
@@ -147,7 +147,7 @@ class TrainerProcess:
             gp._grad = lp.grad
 
     def train(self):
-        epoch = 0
+        epoch, episode = 0, 0
         total_rewards = []
         epoch_action_advantage = torch.empty(size=(0,))
         epoch_logits = torch.empty(size=(0, self.env.action_space.n))
@@ -201,9 +201,10 @@ class TrainerProcess:
 
 
 if __name__ == "__main__":
-    NUM_PROCS = 4
-    print(f'Starting {NUM_PROCS} processes')
-    print( '------------------------------', end='\n\n')
+    NUM_PROCS = mp.cpu_count()
+    print("------------------------------")
+    print(f"Starting {NUM_PROCS} processes")
+    print("------------------------------", end="\n\n")
 
     global_net = ActorCriticNet(4, 2, training=True)
     optimizer = SharedRMSprop(global_net.parameters(), lr=LEARNING_RATE)
