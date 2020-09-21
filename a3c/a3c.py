@@ -15,10 +15,7 @@ from torch.distributions.categorical import Categorical
 from model import ActorCriticNet
 from shared_rmsprop import SharedRMSprop
 
-from collections import namedtuple
-
 torch.manual_seed(0)
-torch.autograd.set_detect_anomaly(True)
 
 """ Asynchronous Advantage Actor-Critic
 
@@ -43,7 +40,6 @@ BATCH_SIZE = 512
 BETA = 0.99
 GAMMA = 0.99
 LEARNING_RATE = 1e-3
-SHARED_NET_UPDATE = 40000
 VALUE_LOSS_CONSTANT = 0.5
 
 
@@ -113,7 +109,7 @@ class TrainerProcess:
             sum_action_advantages,
             episode_logits,
             np.sum(episode_rewards),
-            t,
+            t
         )
 
     def get_discounted_rewards(self, rewards: np.array, GAMMA: float) -> torch.Tensor:
@@ -151,11 +147,10 @@ class TrainerProcess:
             gp._grad = lp.grad
 
     def train(self):
-        episode, epoch, T = 0, 0, 0
-
+        epoch = 0
         total_rewards = []
-        epoch_logits = torch.empty(size=(0, self.env.action_space.n))
         epoch_action_advantage = torch.empty(size=(0,))
+        epoch_logits = torch.empty(size=(0, self.env.action_space.n))
         epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
 
         while True:
@@ -167,7 +162,6 @@ class TrainerProcess:
                 t,
             ) = self.play_episode()
 
-            T += t
             episode += 1
             total_rewards.append(total_episode_reward)
             epoch_weighted_log_probs = torch.cat((epoch_weighted_log_probs, episode_weighted_log_probs), dim=0)
@@ -197,7 +191,6 @@ class TrainerProcess:
                 # reset the epoch arrays, used for entropy calculation
                 epoch_logits = torch.empty(size=(0, self.env.action_space.n))
                 epoch_weighted_log_probs = torch.empty(size=(0,), dtype=torch.float)
-
 
                 # check if solved
                 if np.mean(total_rewards) > 200:
