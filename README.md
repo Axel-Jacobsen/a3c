@@ -4,5 +4,5 @@
 
 ![Reward of 466](good_models/N1/cp_466.mp4)
 ![Reward of 255](good_models/N1/cp_255.mp4)
-![Reward of 197](good_models/N1/cp_192.mp4)
+![Reward of 197](good_models/N1/cp_197.gif)
 ![Reward of 72](good_models/N1/cp_72.mp4)
