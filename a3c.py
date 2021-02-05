@@ -18,21 +18,6 @@ from shared_rmsprop import SharedRMSprop
 torch.manual_seed(0)
 
 """ Asynchronous Advantage Actor-Critic
-
-Following a lot of the following link because i am a pytorch noob
-https://towardsdatascience.com/breaking-down-richard-suttons-policy-gradient-9768602cb63b
-
-optim: RMSProp
-value based method (i.e. this) shared target network updated every 40000 frames
-atari games used Mnih et al., 2015 preprocessing and action repeat of 4
-network architecture of Mnih et al., 2013
-  Conv 16 filters, 8x8, stride 4
-  Conv 32 filters, 4x4, stride 2
-  Fully Connected, 256 hidden
-nonlinearity after each hidden layer is the rectifier (?)
-actor critic had two set of outputs - softmax w/ one entry per action and single linear output representing the value function
-discount = 0.99, RMSProp decay factor of 0.99
-review section 8 for further details
 """
 
 
@@ -63,8 +48,12 @@ class TrainerProcess:
 
     def play_episode(self):
         episode_actions = torch.empty(size=(0,), dtype=torch.long)
-        episode_logits = torch.empty(size=(0, self.env.action_space.n), dtype=torch.long)
-        episode_observs = torch.empty(size=(0, *self.env.observation_space.shape), dtype=torch.long)
+        episode_logits = torch.empty(
+            size=(0, self.env.action_space.n), dtype=torch.long
+        )
+        episode_observs = torch.empty(
+            size=(0, *self.env.observation_space.shape), dtype=torch.long
+        )
         episode_rewards = np.empty(shape=(0,), dtype=np.float)
 
         observation = self.env.reset()
@@ -96,7 +85,9 @@ class TrainerProcess:
         discounted_R -= episode_rewards.mean()
 
         mask = F.one_hot(episode_actions, num_classes=self.env.action_space.n)
-        episode_log_probs = torch.sum(mask.float() * F.log_softmax(episode_logits, dim=1), dim=1)
+        episode_log_probs = torch.sum(
+            mask.float() * F.log_softmax(episode_logits, dim=1), dim=1
+        )
 
         values = self.proc_net.forward_critic(episode_observs)
         action_advantage = (discounted_R.float() - values).detach()
@@ -132,7 +123,9 @@ class TrainerProcess:
             discounted_rewards[i] = discounted_reward
         return torch.from_numpy(discounted_rewards)
 
-    def calculate_policy_loss(self, epoch_logits: torch.Tensor, weighted_log_probs: torch.Tensor):
+    def calculate_policy_loss(
+        self, epoch_logits: torch.Tensor, weighted_log_probs: torch.Tensor
+    ):
         policy_loss = -torch.mean(weighted_log_probs)
         p = F.softmax(epoch_logits, dim=1)
         log_p = F.log_softmax(epoch_logits, dim=0)
@@ -164,8 +157,12 @@ class TrainerProcess:
 
             episode += 1
             total_rewards.append(total_episode_reward)
-            epoch_weighted_log_probs = torch.cat((epoch_weighted_log_probs, episode_weighted_log_probs), dim=0)
-            epoch_action_advantage = torch.cat((epoch_action_advantage, action_advantage_sum), dim=0)
+            epoch_weighted_log_probs = torch.cat(
+                (epoch_weighted_log_probs, episode_weighted_log_probs), dim=0
+            )
+            epoch_action_advantage = torch.cat(
+                (epoch_action_advantage, action_advantage_sum), dim=0
+            )
 
             if episode > BATCH_SIZE:
 
@@ -173,7 +170,8 @@ class TrainerProcess:
                 epoch += 1
 
                 policy_loss, entropy = self.calculate_policy_loss(
-                    epoch_logits=epoch_logits, weighted_log_probs=epoch_weighted_log_probs,
+                    epoch_logits=epoch_logits,
+                    weighted_log_probs=epoch_weighted_log_probs,
                 )
                 value_loss = torch.square(epoch_action_advantage).mean()
                 total_loss = policy_loss + VALUE_LOSS_CONSTANT * value_loss
@@ -185,7 +183,9 @@ class TrainerProcess:
 
                 self.proc_net.load_state_dict(self.global_net.state_dict())
 
-                print(f"{os.getpid()} Epoch: {epoch}, Avg Return per Epoch: {np.mean(total_rewards):.3f}")
+                print(
+                    f"{os.getpid()} Epoch: {epoch}, Avg Return per Epoch: {np.mean(total_rewards):.3f}"
+                )
                 sys.stdout.flush()
 
                 # reset the epoch arrays, used for entropy calculation
@@ -201,7 +201,7 @@ class TrainerProcess:
 
 
 if __name__ == "__main__":
-    NUM_PROCS = mp.cpu_count()
+    NUM_PROCS = mp.cpu_count() // 2
     print("------------------------------")
     print(f"Starting {NUM_PROCS} processes")
     print("------------------------------", end="\n\n")
