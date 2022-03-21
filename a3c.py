@@ -54,7 +54,7 @@ class TrainerProcess:
         episode_observs = torch.empty(
             size=(0, *self.env.observation_space.shape), dtype=torch.long
         )
-        episode_rewards = np.empty(shape=(0,), dtype=np.float)
+        episode_rewards = np.empty(shape=(0,), dtype=np.float64)
 
         observation = self.env.reset()
 
@@ -115,7 +115,7 @@ class TrainerProcess:
         AXEL: Directly from
         https://towardsdatascience.com/breaking-down-richard-suttons-policy-gradient-9768602cb63b
         """
-        discounted_rewards = np.empty_like(rewards, dtype=np.float)
+        discounted_rewards = np.empty_like(rewards, dtype=np.float64)
         for i in range(rewards.shape[0]):
             GAMMAs = np.full(shape=(rewards[i:].shape[0]), fill_value=GAMMA)
             discounted_GAMMAs = np.power(GAMMAs, np.arange(rewards[i:].shape[0]))
